@@ -2,7 +2,7 @@
 
 This repository implements the [Attention Residual](https://arxiv.org/pdf/2603.15031) architecture from Kimi K3 using [TileLang](https://github.com/tile-ai/tilelang).
 
-![Attention Residuals](assets\image.png)
+![Attention Residuals](./assets/image.png)
 
 ### 1. Benchmark
 
