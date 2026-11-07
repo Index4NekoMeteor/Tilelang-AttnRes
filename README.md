@@ -2,21 +2,37 @@
 
 This repository implements the [Attention Residual](https://arxiv.org/pdf/2603.15031) architecture from Kimi K3 using [TileLang](https://github.com/tile-ai/tilelang).
 
-### 1. Benchmark (RTX 5080, Windows 11, bf16)
+![Attention Residuals](assets\image.png)
 
-Tested with input shape `[1280, 8, 7168] | [15360, 8, 768] | [768, 1, 4096]` and `bfloat16` precision.
+### 1. Benchmark
 
-| Shape (num_tokens x num_blocks x hidden_size) | Implementation | Latency (ms) / Speedup |
-| :--- | :--- | :--- |
-| **1280 x 8 x 7168** | PyTorch Eager (Baseline) | 4.694 / 1.00x |
-| | Torch Compile | 1.110 / 4.23x |
-| | **TileLang** | **0.248 / 18.93x** |
-| **15360 x 8 x 768** | PyTorch Eager (Baseline) | 6.146 / 1.00x |
-| | Torch Compile | 1.822 / 3.37x |
-| | **TileLang** | **0.357 / 17.19x** |
-| **768 x 1 x 4096** | PyTorch Eager (Baseline) | 0.231 / 1.00x |
-| | Torch Compile | 0.082 / 2.80x |
-| | **TileLang** | **0.034 / 6.64x** |
+#### 1.1 Testing environment
+OS: Windows 11  
+CPU: 9800x3d  
+GPU: RTX 5080(16G vram)  
+Requirements: [requirements.txt](./requirements.txt)
+
+
+#### 1.2 Tested with input shape `[1280, 8, 7168] | [7680, 8, 768] | [768, 1, 4096]` and `bfloat16` precision.
+
+| Shape | Tilelang (ms) | Torch (ms) | Torch Compile (ms) | Speedup(Tilelang) | Speedup(Torch Compile) | rel_err Tilelang/Torch | rel_err Tilelang/Torch Compile |
+|---|---|---|---|---|---|---|---|
+| 1280×8×7168 | 0.246 | 4.698 | 1.120 | **19.14×** | 4.20× | 2.24e-05 | 1.98e-05 |
+| 7680×8×768  | 0.165 | 3.030 | 1.163 | **18.41×** | 2.60× | 2.48e-05 | 2.46e-05 |
+| 768×1×4096  | 0.035 | 0.231 | 0.090 | **6.57×**  | 2.56× | 1.38e-05 | 1.52e-05 |
+
+#### 1.3 Tested with input shape `[1280, 8, 7168] | [7680, 8, 768] | [768, 1, 4096]` and `float32` precision.
+
+| Shape | Tilelang (ms) | Torch (ms) | Torch Compile (ms) | Speedup(Tilelang) | Speedup(Torch Compile) | rel_err Tilelang/Torch | rel_err Tilelang/Torch Compile |
+|---|---|---|---|---|---|---|---|
+| 1280×8×7168 | 0.454 | 4.479 | 2.230 | **9.87×** | 2.01× | 1.03e-06 | 9.95e-07 |
+| 7680×8×768  | 0.299 | 2.848 | 1.259 | **9.54×** | 2.26× | 5.31e-07 | 5.26e-07 |
+| 768×1×4096  | 0.054 | 0.225 | 0.112 | **4.14×** | 2.01× | 7.47e-07 | 4.86e-07 |
+
+> **Notes**
+> - `rel_err = ‖Tilelang − baseline‖₂ / ‖baseline‖₂`
+> - Timing uses `tilelang.profiler.bench.do_bench` with `warmup=100`
+
 
 ### 2. Usage
 

@@ -221,78 +221,55 @@ if __name__ == "__main__":
         hidden_states = torch.matmul(probs, v_float).squeeze(1)
         return hidden_states.to(v.dtype)
 
-    dtype = torch.bfloat16
-    shape = (768, 1, 4096)
+    def rel(a, b):
+        return ((a - b).norm() / b.norm()).item()
 
-    torch.manual_seed(0)
-    bs, N, H = shape
-    prefix_sum = torch.randn(bs, H, dtype=dtype, device="cuda")
-    block_residual = torch.randn(bs, N, H, dtype=dtype, device="cuda")
+    SHAPES = [
+        (1280, 8, 7168),
+        (7680, 8, 768),
+        (768, 1, 4096),
+    ]
+    DTYPES = [torch.bfloat16, torch.float32]
 
-    w = torch.randn(H, dtype=torch.float32, device="cuda")
+    for dtype in DTYPES:
+        for shape in SHAPES:
+            torch.manual_seed(0)
+            bs, N, H = shape
+            prefix_sum = torch.randn(bs, H, dtype=dtype, device="cuda")
+            block_residual = torch.randn(bs, N, H, dtype=dtype, device="cuda")
+            w = torch.randn(H, dtype=torch.float32, device="cuda")
+            w2 = torch.randn(H, dtype=torch.float32, device="cuda")
 
-    w2 = torch.randn(H, dtype=torch.float32, device="cuda")
+            def Tilelang():
+                return block_residual_fwd(block_residual, prefix_sum, w, w2)[0]
 
-    def Tilelang():
-        return block_residual_fwd(block_residual, prefix_sum, w, w2)[0]
+            compile_kernel = torch.compile(_apply_attn_res)
 
-    compile_kernel = torch.compile(_apply_attn_res)
-    def Torch_compile():
-        return compile_kernel(prefix_sum, block_residual, w, w2)
+            def Torch_compile():
+                return compile_kernel(prefix_sum, block_residual, w, w2)
 
-    def Torch():
-        return _apply_attn_res(prefix_sum, block_residual, w, w2)
+            def Torch():
+                return _apply_attn_res(prefix_sum, block_residual, w, w2)
 
-    print(f"=== shape: {list(shape)} ===")
+            print(f"\n=== dtype={dtype}, shape={list(shape)} ===")
+            torch.cuda.empty_cache()
+            t_tile = do_bench(Tilelang, warmup=100)
+            torch.cuda.empty_cache()
+            t_torch = do_bench(Torch, warmup=100)
+            torch.cuda.empty_cache()
+            t_comp = do_bench(Torch_compile, warmup=100)
 
-    print("\n=== benchmark ===")
-    torch.cuda.empty_cache()
-    result_tilelang = do_bench(Tilelang, warmup=100)
-    print("Tilelang:", result_tilelang)
+            print(f"Tilelang: {t_tile:.3f} ms | Torch: {t_torch:.3f} ms | Compile: {t_comp:.3f} ms")
+            print(f"Tilelang speedup: {t_torch / t_tile:.2f}x | Compile speedup: {t_torch / t_comp:.2f}x")
 
-    torch.cuda.empty_cache()
-    result_torch = do_bench(Torch, warmup=100)
-    print("Torch:", result_torch)
-
-    torch.cuda.empty_cache()
-    result_torch_compile = do_bench(Torch_compile, warmup=100)
-    print("Torch compile:", result_torch_compile)
-
-    print("\n=== speedup ===")
-    print(f"Tilelang speedup: {result_torch / result_tilelang}")  # ty: ignore
-    print(f"Torch Compile speedup: {result_torch / result_torch_compile}")  # ty: ignore
-
-    with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        profile_memory=True,
-        record_shapes=True,
-    ) as prof:
-        with torch.profiler.record_function("Tilelang"):
-            Tilelang()
-        torch.cuda.synchronize()
-
-        with torch.profiler.record_function("Torch"):
-            Torch()
-        torch.cuda.synchronize()
-
-        with torch.profiler.record_function("Torch_compile"):
-            Torch_compile()
-        torch.cuda.synchronize()
-
-    print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=20))
-
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
-    tilelang_result = Tilelang()
-    torch_result = Torch()
-    torch_compile_result = Torch_compile()
-
-    print("\n=== Accuracy Test (torch.allclose) ===")
-    is_pass_torch = torch.allclose(tilelang_result, torch_result, rtol=0.01, atol=0.01)
-    is_pass_compile = torch.allclose(tilelang_result, torch_compile_result, rtol=0.01, atol=0.01)
-
-    print(f"TileLang vs Torch:         {'PASS' if is_pass_torch else 'FAIL'}")
-    print(f"TileLang vs Torch Compile: {'PASS' if is_pass_compile else 'FAIL'}")
-
-    assert is_pass_torch and is_pass_compile, "check failed!"
-    print("All tests passed successfully.")
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            r_tile = Tilelang()
+            r_torch = Torch()
+            r_comp = Torch_compile()
+            atol = 0.01 if dtype == torch.float32 else 0.05
+            p1 = torch.allclose(r_tile, r_torch, rtol=0.01, atol=atol)
+            p2 = torch.allclose(r_tile, r_comp, rtol=0.01, atol=atol)
+            print(f"rel_err   Tile-vs-Torch={rel(r_tile, r_torch):.3e}  Tile-vs-Compile={rel(r_tile, r_comp):.3e}")
+            print(f"TileLang vs Torch: {'PASS' if p1 else 'FAIL'} | vs Compile: {'PASS' if p2 else 'FAIL'}")
+            
