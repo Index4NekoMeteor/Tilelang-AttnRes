@@ -63,8 +63,8 @@ def block_residual_bwd_kernel(
     @T.prim_func
     def bwd_kernel(
         grad: T.Tensor((num_token, hidden_size), dtype),
-        block_residual: T.Tensor((num_token, num_blocks, hidden_size), dtype),
         prefix_sum: T.Tensor((num_token, hidden_size), dtype),
+        block_residual: T.Tensor((num_token, num_blocks, hidden_size), dtype),
         norm_weight: T.Tensor((hidden_size,), weight_dtype),
         proj_weight: T.Tensor((hidden_size,), weight_dtype),
         # fwd cache values
@@ -256,8 +256,8 @@ def block_residual_bwd_kernel(
 
 def block_residual_bwd(
     grad,
-    block_residual,
     prefix_sum,
+    block_residual,
     norm_weight,
     proj_weight,
     # fwd cache values
@@ -288,8 +288,8 @@ def block_residual_bwd(
         
     kernel(
         grad,
-        block_residual,
         prefix_sum,
+        block_residual,
         norm_weight,
         proj_weight,
         rsqrt_output,

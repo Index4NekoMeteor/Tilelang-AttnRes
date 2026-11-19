@@ -1,13 +1,16 @@
 import torch
+import warnings
 import torch._inductor.config as inductor_config
 
 from tilelang.profiler.bench import do_bench
 from kernels.attn_res_fwd import block_residual_fwd
 from torch.profiler import profile, ProfilerActivity
 
+warnings.filterwarnings("ignore", message=".*Online softmax is disabled.*")
 if hasattr(inductor_config.triton, "coalesce_tiling_analysis"):
     inductor_config.triton.coalesce_tiling_analysis = False
 
+torch.set_float32_matmul_precision("high")
 
 # from https://huggingface.co/moonshotai/Kimi-K3/blob/main/modeling_kimi_linear.py
 def apply_attn_res(prefix_sum, block_residual, proj, norm):
@@ -47,7 +50,7 @@ for dtype in DTYPES:
         compile_kernel = torch.compile(apply_attn_res)
 
         def Tilelang():
-            return block_residual_fwd(block_residual, prefix_sum, w, w2)
+            return block_residual_fwd(prefix_sum, block_residual, w, w2)
 
         def Torch_compile():
             return compile_kernel(prefix_sum, block_residual, w, w2)

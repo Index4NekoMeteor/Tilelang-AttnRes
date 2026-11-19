@@ -37,8 +37,8 @@ def block_residual_fwd_kernel(
 
     @T.prim_func
     def fwd_kernel(
-        block_residual: T.Tensor((num_token, num_block, hidden_size), dtype),
         prefix_sum: T.Tensor((num_token, hidden_size), dtype),
+        block_residual: T.Tensor((num_token, num_block, hidden_size), dtype),
         norm_weight: T.Tensor((hidden_size,), weight_dtype),
         proj_weight: T.Tensor((hidden_size,), weight_dtype),
         # output value
@@ -150,7 +150,7 @@ def block_residual_fwd_kernel(
     return fwd_kernel
 
 
-def block_residual_fwd(block_residual, prefix_sum, proj_w, norm_w, eps=1e-6):
+def block_residual_fwd(prefix_sum, block_residual, proj_weight, norm_weight, eps=1e-6):
     num_token, num_block, hidden_size = block_residual.shape
     total_block = num_block + 1
 
@@ -162,7 +162,7 @@ def block_residual_fwd(block_residual, prefix_sum, proj_w, norm_w, eps=1e-6):
     rsqrt_output = torch.empty(num_token, total_block, dtype=torch.float32, device=device)
     softmax_output = torch.empty(num_token, total_block, dtype=torch.float32, device=device)
 
-    weight_dtype = str(norm_w.dtype).replace("torch.", "")
+    weight_dtype = str(norm_weight.dtype).replace("torch.", "")
     dtype = str(block_residual.dtype).replace("torch.", "")
 
 
@@ -173,10 +173,10 @@ def block_residual_fwd(block_residual, prefix_sum, proj_w, norm_w, eps=1e-6):
     )
     
     kernel(
-        block_residual,
         prefix_sum,
-        proj_w,
-        norm_w,
+        block_residual,
+        proj_weight,
+        norm_weight,
         output,
         rsqrt_output,
         max_output,
