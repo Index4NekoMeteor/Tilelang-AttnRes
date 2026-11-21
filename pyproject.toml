@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools >= 77.0.3", ]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tilelang-attnres"
+version = "0.1.0"
+description = "Attention Residual architecture from Kimi K3 using TileLang, with fused forward and backward kernels."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Index4NekoMeteor"}]
+
+[project.optional-dependencies]
+all = [
+    "torch>=2.0",
+    "tilelang>=0.1.15"
+]
+
+[tool.setuptools.packages.find]
+include = ["tilelang_attnres*"]
