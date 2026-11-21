@@ -1,11 +1,6 @@
-import os
-import sys
 import torch
 import tilelang
-from itertools import product
 from tilelang import language as T
-from tilelang.autotuner.capture import set_autotune_inputs
-from tilelang.layout.swizzle import make_linear_layout, make_swizzled_layout
 
 
 # NOTE: disable autotuner
@@ -258,8 +253,8 @@ def block_residual_bwd(
     grad,
     prefix_sum,
     block_residual,
-    norm_weight,
     proj_weight,
+    norm_weight,
     # fwd cache values
     rsqrt_output,
     max_output,

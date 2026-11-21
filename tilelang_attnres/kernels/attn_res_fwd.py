@@ -1,8 +1,6 @@
 import torch
 import tilelang
-import itertools
 from tilelang import language as T
-from tilelang.autotuner import set_autotune_inputs
 
 
 # @tilelang.autotune(
