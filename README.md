@@ -15,7 +15,6 @@ Tilelang-AttnRes/
 │   └── kernels/
 │       ├── attn_res_fwd.py      # Forward kernel
 │       └── attn_res_bwd.py      # Backward kernel
-├── test.py                      # Correctness verification script
 ├── requirements.txt
 └── README.md
 ```
