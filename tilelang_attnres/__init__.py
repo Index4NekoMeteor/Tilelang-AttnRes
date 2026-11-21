@@ -56,7 +56,7 @@ class AttnResFunction(Function):
             div_output,
             softmax_output,
         )
-        return dprefix_sum, dblock_residual, dnorm_weight, dproj_weight, None
+        return dprefix_sum, dblock_residual, dproj_weight, dnorm_weight, None
 
 
 def attn_res_tilelang(prefix_sum, block_residual, proj_weight, norm_weight, eps=1e-6):
