@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.autograd import Function
-from kernels import block_residual_fwd, block_residual_bwd
+from .kernels import block_residual_fwd, block_residual_bwd
 
 
 class AttnResFunction(Function):
@@ -32,23 +32,22 @@ class AttnResFunction(Function):
 
     @staticmethod
     def backward(ctx, grad):
-        grad = grad.contiguous()
         (
-            block_residual, 
-            prefix_sum, 
-            proj_weight, 
-            norm_weight, 
-            rsqrt_output, 
-            max_output, 
-            exp_output, 
-            div_output, 
-            softmax_output
+            prefix_sum,
+            block_residual,
+            proj_weight,
+            norm_weight,
+            rsqrt_output,
+            max_output,
+            exp_output,
+            div_output,
+            softmax_output,
         ) = ctx.saved_tensors
 
         dprefix_sum, dblock_residual, dproj_weight, dnorm_weight = block_residual_bwd(
             grad,
-            block_residual,
             prefix_sum,
+            block_residual,
             proj_weight,
             norm_weight,
             rsqrt_output,
@@ -57,11 +56,11 @@ class AttnResFunction(Function):
             div_output,
             softmax_output,
         )
-        return dprefix_sum, dblock_residual, dproj_weight, dnorm_weight, None
+        return dprefix_sum, dblock_residual, dnorm_weight, dproj_weight, None
 
 
 def attn_res_tilelang(prefix_sum, block_residual, proj_weight, norm_weight, eps=1e-6):
-    return AttnResFunction.apply(prefix_sum, block_residual, proj_weight, norm_weight, eps=eps)
+    return AttnResFunction.apply(prefix_sum, block_residual, proj_weight, norm_weight, eps)
 
 
 class AttnRes(nn.Module):
@@ -73,3 +72,12 @@ class AttnRes(nn.Module):
 
     def forward(self, prefix_sum, block_residual):
         return AttnResFunction.apply(prefix_sum, block_residual, self.proj_weight, self.norm_weight, self.eps)
+
+
+__all__ = [
+    "AttnResFunction",
+    "AttnRes", 
+    "block_residual_fwd",
+    "block_residual_bwd",
+    "attn_res_tilelang",
+]
