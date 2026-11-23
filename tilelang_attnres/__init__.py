@@ -59,8 +59,8 @@ class AttnResFunction(Function):
         return dprefix_sum, dblock_residual, dproj_weight, dnorm_weight, None
 
 
-def attn_res_tilelang(prefix_sum, block_residual, proj_weight, norm_weight, eps=1e-6):
-    return AttnResFunction.apply(prefix_sum, block_residual, proj_weight, norm_weight, eps)
+def attn_res_tilelang(prefix_sum: torch.Tensor, block_residual: torch.Tensor, proj: nn.Linear, norm, eps=None):
+    return AttnResFunction.apply(prefix_sum, block_residual, proj.weight, norm.weight, norm.variance_epsilon if eps is None else eps)
 
 
 class AttnRes(nn.Module):
