@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tilelang-attnres"
-version = "0.1.0"
+version = "0.2.0"
 description = "Attention Residual architecture from Kimi K3 using TileLang, with fused forward and backward kernels."
 readme = "README.md"
 requires-python = ">=3.11"
