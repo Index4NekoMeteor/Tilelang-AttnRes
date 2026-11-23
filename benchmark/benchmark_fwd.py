@@ -3,8 +3,8 @@ import warnings
 from benchmark.utils import rel
 from tilelang.profiler.bench import do_bench
 import torch._inductor.config as inductor_config
-from tilelang_attnres.kernels.baseline import apply_attn_res
-from tilelang_attnres.kernels.attn_res_fwd import block_residual_fwd
+from tilelang_attnres.kernels import block_residual_fwd, apply_attn_res
+
 
 warnings.filterwarnings("ignore")
 torch.set_float32_matmul_precision("high")

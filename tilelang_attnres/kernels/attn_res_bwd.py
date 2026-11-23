@@ -35,7 +35,6 @@ from tilelang import language as T
 @tilelang.jit(
     pass_configs={
         tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
-        tilelang.PassConfigKey.TL_DISABLE_DATA_RACE_CHECK: True,
         tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
     },
 )
@@ -46,7 +45,6 @@ def block_residual_bwd_kernel(
     weight_dtype,
     threads=128,
     threads_2=64,
-    token_size=32,
     block_size=256,
     block_size_2=64,
     num_stages: int = 1,
@@ -72,7 +70,7 @@ def block_residual_bwd_kernel(
         doutput: T.Tensor((num_token, total_block, hidden_size), dtype),
         dproj_weight: T.Tensor((hidden_size), accum_dtype),
         dnorm_weight: T.Tensor((hidden_size), accum_dtype),
-        add_workspace: T.Tensor((num_token, total_block), accum_dtype),
+        add_workspace: T.Tensor((hidden_size), accum_dtype),
     ):
         with T.Kernel(num_token, threads=threads) as token:
             T.annotate_min_blocks_per_sm(2)
@@ -159,8 +157,6 @@ def block_residual_bwd_kernel(
                 div_3[i] = div_3[i] - T.if_then_else(i == idx_local[0], div_3_sum[0], T.float32(0.0))  # ty:ignore
                 add_workspace_local_ptx[i] = div_3[i] * rsqrt_output_local_ptx[i]
 
-            T.copy(add_workspace_local_ptx, add_workspace[token, :total_block])
-
             for i in T.unroll(total_block):
                 pow_2 = rsqrt_output_local_ptx[i] * rsqrt_output_local_ptx[i] * rsqrt_output_local_ptx[i]
                 mul_12[i] = (div_3[i] * bmm_weight[i] * -0.5) * pow_2 * inv_2
@@ -183,6 +179,8 @@ def block_residual_bwd_kernel(
                     weight_local_ptx[j] = norm_share_ptx[j] * proj_share_ptx[j]
 
                 for j in T.Parallel(block_size):
+                    wg = T.alloc_local((1), accum_dtype)
+                    wg[0] = 0
                     for i in T.unroll(total_block):
                         grad_fp32 = T.cast(grad_share_ptx[j], accum_dtype)
                         hidden_fp32 = T.cast(hidden_share_ptx[i, j], accum_dtype)
@@ -194,17 +192,17 @@ def block_residual_bwd_kernel(
                             mul_6 + bmm_1 + mul_12[i] * (hidden_fp32 * 2.0), weight_dtype
                         )
 
+                        wg[0] += add_workspace_local_ptx[i] * hidden_fp32
+                    T.atomic_add(add_workspace[ptx_start + j], wg[0])
+
         with T.Kernel(T.ceildiv(hidden_size, block_size_2), threads=threads_2) as hidden_block:
             ptx_start = hidden_block * block_size_2
             ptx_end = ptx_start + block_size_2
 
-            mul_5 = T.alloc_fragment((token_size, block_size_2), accum_dtype)
             mul_5_sum = T.alloc_fragment((block_size_2), accum_dtype)
-            add_local_ptx = T.alloc_shared((token_size, total_block), accum_dtype)
 
             proj_weight_ptx = T.alloc_fragment((block_size_2), weight_dtype)
             norm_weight_ptx = T.alloc_fragment((block_size_2), weight_dtype)
-            hidden_share_ptx = T.alloc_shared((token_size, total_block, block_size_2), dtype)
 
             dproj_weight_local_ptx = T.alloc_fragment((block_size_2), weight_dtype)
             dnorm_weight_local_ptx = T.alloc_fragment((block_size_2), weight_dtype)
@@ -212,33 +210,9 @@ def block_residual_bwd_kernel(
             T.copy(proj_weight[ptx_start:ptx_end], proj_weight_ptx)
             T.copy(norm_weight[ptx_start:ptx_end], norm_weight_ptx)
 
-            T.clear(mul_5_sum)
-
             T.pdl_sync()
-            for token in T.Pipelined(T.ceildiv(num_token, token_size), num_stages=num_stages):
-                token_ptx_start = token * token_size
-                token_ptx_end = token_ptx_start + token_size
 
-                T.copy(add_workspace[token_ptx_start:token_ptx_end, :], add_local_ptx)
-                T.copy(
-                    block_residual[token_ptx_start:token_ptx_end, :, ptx_start:ptx_end],
-                    hidden_share_ptx[:, 0:num_blocks, :],
-                )
-                T.copy(
-                    prefix_sum[token_ptx_start:token_ptx_end, ptx_start:ptx_end],
-                    hidden_share_ptx[:, num_blocks:total_block, :],
-                )
-
-                for t, j in T.Parallel(token_size, block_size_2):
-                    tile_acc = T.alloc_local((1), accum_dtype)
-                    tile_acc[0] = 0
-                    for i in T.unroll(total_block):
-                        hidden_fp32 = T.cast(hidden_share_ptx[t, i, j], accum_dtype)
-                        tile_acc[0] += add_local_ptx[t, i] * hidden_fp32
-                    mul_5[t, j] = tile_acc[0]
-
-                T.reduce_sum(mul_5, mul_5_sum, dim=0, clear=False)
-
+            T.copy(add_workspace[ptx_start:ptx_end], mul_5_sum)
             for j in T.Parallel(block_size_2):
                 dproj_weight_local_ptx[j] = T.cast(mul_5_sum[j] * norm_weight_ptx[j], weight_dtype)
                 dnorm_weight_local_ptx[j] = T.cast(mul_5_sum[j] * proj_weight_ptx[j], weight_dtype)
@@ -272,7 +246,7 @@ def block_residual_bwd(
     doutput = torch.empty((num_token, total_block, hidden_size), device=device, dtype=block_residual.dtype)
     dproj_weight = torch.empty((hidden_size), device=device, dtype=norm_weight.dtype)
     dnorm_weight = torch.empty((hidden_size), device=device, dtype=norm_weight.dtype)
-    add_workspace = torch.empty((num_token, total_block), device=device, dtype=torch.float32)
+    add_workspace = torch.zeros((hidden_size), device=device, dtype=torch.float32)
 
 
     kernel = block_residual_bwd_kernel(
