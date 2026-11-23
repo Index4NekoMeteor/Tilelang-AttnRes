@@ -19,6 +19,51 @@ Tilelang-AttnRes/
 └── README.md
 ```
 
+## Usage
+
+### Install
+
+```bash
+pip install tilelang-attn-res
+```
+
+### Replace the original function
+
+In modeling_kimi_k3.py
+```python
+from tilelang_attnres import attn_res_tilelang
+
+
+class KimiDecoderLayer(nn.Module):
+    def __init__(self, config: KimiLinearConfig, layer_idx: int):
+        super().__init__()
+        ...
+
+    def _forward_attn_residual(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: tuple[torch.Tensor] | None = None,
+        output_attentions: bool | None = False,
+        use_cache: bool | None = False,
+        block_residual: torch.Tensor | None = None,
+        **kwargs: Unpack[FlashAttentionKwargs],
+    ):
+        batch_size, seq_len, hidden_size = hidden_states.shape
+        prefix_sum = hidden_states
+
+        if block_residual is not None and block_residual.shape[1] > 0:
+            hidden_states = attn_res_tilelang(  # replace _apply_attn_res
+                prefix_sum.view(-1, hidden_size),
+                block_residual,
+                self.self_attention_res_proj,
+                self.self_attention_res_norm,
+            ).view(batch_size, seq_len, hidden_size)
+        ...
+```
+
+
 ## Benchmark
 
 ### Testing environment
@@ -82,10 +127,6 @@ Tilelang-AttnRes/
 > - `rel_err = ‖TileLang − baseline‖₂ / ‖baseline‖₂`, computed in `float32` to avoid bf16 accumulation artifacts in the metric itself.
 > - Timing uses `tilelang.profiler.bench.do_bench` with `warmup=100`.
 > - bf16 backward results are also verified; expected `rel_err` is around `1e-4`.
-
-## Future
-
-- [x] Implement backward
 
 ## Citation
 
