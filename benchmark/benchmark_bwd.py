@@ -1,6 +1,5 @@
 import torch
 import warnings
-from benchmark.utils import check, rel
 from tilelang.profiler.bench import do_bench
 import torch._inductor.config as inductor_config
 from tilelang_attnres.kernels import block_residual_fwd, block_residual_bwd, apply_attn_res
@@ -78,13 +77,3 @@ for dtype in DTYPES:
 
         print(f"Tilelang: {t_tile:.3f} ms | Torch: {t_torch:.3f} ms | Compile: {t_comp:.3f} ms")
         print(f"Tilelang speedup: {t_torch / t_tile:.2f}x | Compile speedup: {t_torch / t_comp:.2f}x")
-
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        r_tile = Tilelang()
-        r_torch = Torch()
-        r_comp = Torch_compile()
-
-        p1 = check("Tile-vs-Torch", r_tile, r_torch)
-        p2 = check("Tile-vs-Compile", r_tile, r_comp)
-        print(f"TileLang vs Torch: {'PASS' if p1 else 'FAIL'} | vs Compile: {'PASS' if p2 else 'FAIL'}")

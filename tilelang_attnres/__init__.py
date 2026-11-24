@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.autograd import Function
-from .kernels import block_residual_fwd, block_residual_bwd
+from .kernels import block_residual_fwd, block_residual_bwd, apply_attn_res
 
 
 class AttnResFunction(Function):
@@ -59,8 +59,14 @@ class AttnResFunction(Function):
         return dprefix_sum, dblock_residual, dproj_weight, dnorm_weight, None
 
 
-def attn_res_tilelang(prefix_sum: torch.Tensor, block_residual: torch.Tensor, proj: nn.Linear, norm, eps=None):
-    return AttnResFunction.apply(prefix_sum, block_residual, proj.weight, norm.weight, norm.variance_epsilon if eps is None else eps)
+def attn_res_tilelang(prefix_sum: torch.Tensor, block_residual: torch.Tensor, proj: nn.Linear, norm, eps=1e-6):
+    return AttnResFunction.apply(
+        prefix_sum,
+        block_residual,
+        proj.weight.view(-1),
+        norm.weight.view(-1),
+        norm.variance_epsilon if eps is None else eps,
+    )
 
 
 class AttnRes(nn.Module):

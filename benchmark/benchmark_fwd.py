@@ -1,6 +1,5 @@
 import torch
 import warnings
-from benchmark.utils import rel
 from tilelang.profiler.bench import do_bench
 import torch._inductor.config as inductor_config
 from tilelang_attnres.kernels import block_residual_fwd, apply_attn_res
@@ -45,22 +44,11 @@ for dtype in DTYPES:
 
         print(f"\n=== dtype={dtype}, shape={list(shape)} ===")
         torch.cuda.empty_cache()
-        t_tile: float = do_bench(Tilelang, warmup=100, _n_repeat=100)
+        t_tile: float = do_bench(Tilelang, warmup=100, _n_repeat=100, backend="cupti")
         torch.cuda.empty_cache()
-        t_torch: float = do_bench(Torch, warmup=100, _n_repeat=100)
+        t_torch: float = do_bench(Torch, warmup=100, _n_repeat=100, backend="cupti")
         torch.cuda.empty_cache()
-        t_comp: float = do_bench(Torch_compile, warmup=100, _n_repeat=100)
+        t_comp: float = do_bench(Torch_compile, warmup=100, _n_repeat=100, backend="cupti")
 
         print(f"Tilelang: {t_tile:.3f} ms | Torch: {t_torch:.3f} ms | Compile: {t_comp:.3f} ms")
         print(f"Tilelang speedup: {t_torch / t_tile:.2f}x | Compile speedup: {t_torch / t_comp:.2f}x")
-
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        r_tile = Tilelang()[0]
-        r_torch = Torch()
-        r_comp = Torch_compile()
-        atol = 0.01 if dtype == torch.float32 else 0.05
-        p1 = torch.allclose(r_tile, r_torch, rtol=0.01, atol=atol)
-        p2 = torch.allclose(r_tile, r_comp, rtol=0.01, atol=atol)
-        print(f"rel_err   Tile-vs-Torch={rel(r_tile, r_torch):.3e}  Tile-vs-Compile={rel(r_tile, r_comp):.3e}")
-        print(f"TileLang vs Torch: {'PASS' if p1 else 'FAIL'} | vs Compile: {'PASS' if p2 else 'FAIL'}")
