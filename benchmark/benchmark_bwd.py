@@ -1,6 +1,7 @@
 import torch
 import warnings
 from tilelang.profiler.bench import do_bench
+from benchmark.utils import measure_peak_memory
 import torch._inductor.config as inductor_config
 from tilelang_attnres.kernels import block_residual_fwd, block_residual_bwd, apply_attn_res
 
@@ -21,7 +22,7 @@ SHAPES = [
 ]
 DTYPES = [torch.bfloat16, torch.float32]
 
-compile = torch.compile(apply_attn_res)
+compile_kernel = torch.compile(apply_attn_res)
 
 for dtype in DTYPES:
     for shape in SHAPES:
@@ -29,12 +30,13 @@ for dtype in DTYPES:
         bs, N, H = shape
         prefix_sum = torch.randn(bs, H, dtype=dtype, device="cuda", requires_grad=True)
         block_residual = torch.randn(bs, N, H, dtype=dtype, device="cuda", requires_grad=True)
-        proj_weight = torch.ones(H, dtype=torch.float32, device="cuda", requires_grad=True)
-        norm_weight = torch.ones(H, dtype=torch.float32, device="cuda", requires_grad=True) + 1
+        proj_weight = torch.nn.Linear(H, 1, dtype=torch.float32, device="cuda")
+        norm_weight = torch.nn.RMSNorm(H, dtype=torch.float32, device="cuda", eps=1e-6)
+        norm_weight.variance_epsilon = norm_weight.eps
         dout = torch.randn(bs, H, dtype=dtype, device="cuda", requires_grad=True)
 
         output, rsqrt_output, max_output, exp_output, div_output, softmax_output = block_residual_fwd(
-            prefix_sum, block_residual, proj_weight, norm_weight
+            prefix_sum, block_residual, proj_weight.weight.view(-1), norm_weight.weight.view(-1)
         )
 
         def Tilelang():
@@ -42,8 +44,8 @@ for dtype in DTYPES:
                 dout,
                 prefix_sum,
                 block_residual,
-                proj_weight,
-                norm_weight,
+                proj_weight.weight.view(-1),
+                norm_weight.weight.view(-1),
                 rsqrt_output,
                 max_output,
                 exp_output,
@@ -54,26 +56,33 @@ for dtype in DTYPES:
         def Torch():
             return torch.autograd.grad(
                 apply_attn_res(prefix_sum, block_residual, proj_weight, norm_weight),
-                [prefix_sum, block_residual, proj_weight, norm_weight],
+                [prefix_sum, block_residual, proj_weight.weight, norm_weight.weight],
                 dout,
                 retain_graph=False,
             )
 
         def Torch_compile():
             return torch.autograd.grad(
-                compile(prefix_sum, block_residual, proj_weight, norm_weight),
-                [prefix_sum, block_residual, proj_weight, norm_weight],
+                compile_kernel(prefix_sum, block_residual, proj_weight, norm_weight),
+                [prefix_sum, block_residual, proj_weight.weight, norm_weight.weight],
                 dout,
                 retain_graph=False,
             )
 
         print(f"\n=== dtype={dtype}, shape={list(shape)} ===")
         torch.cuda.empty_cache()
-        t_tile: float = do_bench(Tilelang, warmup=100, _n_repeat=50)
+        t_tile: float = do_bench(Tilelang, warmup=100, _n_repeat=100, backend="cupti")
         torch.cuda.empty_cache()
-        t_torch: float = do_bench(Torch, warmup=100, _n_repeat=50)
+        t_torch: float = do_bench(Torch, warmup=100, _n_repeat=100, backend="cupti")
         torch.cuda.empty_cache()
-        t_comp: float = do_bench(Torch_compile, warmup=100, _n_repeat=50)
+        t_comp: float = do_bench(Torch_compile, warmup=100, _n_repeat=100, backend="cupti")
 
-        print(f"Tilelang: {t_tile:.3f} ms | Torch: {t_torch:.3f} ms | Compile: {t_comp:.3f} ms")
-        print(f"Tilelang speedup: {t_torch / t_tile:.2f}x | Compile speedup: {t_torch / t_comp:.2f}x")
+        tilelang_peak_memory = measure_peak_memory(Tilelang)
+        torch_peak_memory = measure_peak_memory(Torch)
+        comp_peak_memory = measure_peak_memory(Torch_compile)
+
+        print(f"Time -> Tilelang: {t_tile:.3f} ms | Torch: {t_torch:.3f} ms | Compile: {t_comp:.3f} ms")
+        print(f"Speedup -> Tilelang: {t_torch / t_tile:.2f}x | Compile: {t_torch / t_comp:.2f}x")
+        print(
+            f"Mem  -> Tilelang: {tilelang_peak_memory:.2f} MB | Torch: {torch_peak_memory:.2f} MB | Compile: {comp_peak_memory:.2f} MB"
+        )

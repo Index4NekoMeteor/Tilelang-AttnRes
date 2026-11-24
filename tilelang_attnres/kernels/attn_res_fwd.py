@@ -25,9 +25,9 @@ def block_residual_fwd_kernel(
     dtype,
     weight_dtype,
     eps=1e-6,
-    block_size=1024,
-    threads=64,
-    num_stages: int = 2,
+    block_size=512,
+    threads=128,
+    num_stages: int = 4,
     accum_dtype=T.float32,
 ):
     num_token = T.dynamic("num_token")
@@ -53,65 +53,54 @@ def block_residual_fwd_kernel(
             rsqrt = T.alloc_shared((total_block,), accum_dtype)
 
             hidden_weight_max = T.alloc_fragment((1,), accum_dtype)
-            hidden_dot_sum_ptx = T.alloc_fragment((total_block,), accum_dtype)
-            hidden_square_sum_ptx = T.alloc_fragment((total_block,), accum_dtype)
 
             divisor = T.alloc_fragment((1,), accum_dtype)
             result_ptx = T.alloc_fragment((block_size,), accum_dtype)
 
-            T.clear(hidden_dot_sum_ptx)
-            T.clear(hidden_square_sum_ptx)
+            tile_dot = T.alloc_fragment((total_block,), accum_dtype)
+            tile_sum = T.alloc_fragment((total_block,), accum_dtype)
 
-            hidden_share_ptx = T.alloc_shared((total_block, block_size), dtype)
+            T.clear(tile_dot)
+            T.clear(tile_sum)
 
             for block in T.Pipelined(T.ceildiv(hidden_size, block_size), num_stages=num_stages):
                 ptx = block * block_size
-
-                tile_sum = T.alloc_fragment((total_block,), accum_dtype)
-                tile_dot = T.alloc_fragment((total_block,), accum_dtype)
-                
-                weight = T.alloc_fragment((block_size,), accum_dtype)
                 hidden_dot_ptx = T.alloc_fragment((total_block, block_size), accum_dtype)
                 hidden_square_ptx = T.alloc_fragment((total_block, block_size), accum_dtype)
 
-                norm_weight_share_ptx = T.alloc_fragment((block_size,), accum_dtype)
-                proj_weight_share_ptx = T.alloc_fragment((block_size,), accum_dtype)
+                hidden_share_ptx = T.alloc_shared((total_block, block_size), dtype)
+                norm_weight_share_ptx = T.alloc_shared((block_size,), weight_dtype)
+                proj_weight_share_ptx = T.alloc_shared((block_size,), weight_dtype)
 
-                T.copy(block_residual[token, :, ptx : ptx + block_size], hidden_share_ptx[0:num_block, :])
-                T.copy(prefix_sum[token, ptx : ptx + block_size], hidden_share_ptx[num_block:total_block, :])
                 T.copy(norm_weight[ptx : ptx + block_size], norm_weight_share_ptx)
                 T.copy(proj_weight[ptx : ptx + block_size], proj_weight_share_ptx)
-
-                for j in T.Parallel(block_size):
-                    weight[j] = norm_weight_share_ptx[j] * proj_weight_share_ptx[j]
+                T.copy(block_residual[token, :, ptx : ptx + block_size], hidden_share_ptx[0:num_block, :])
+                T.copy(prefix_sum[token, ptx : ptx + block_size], hidden_share_ptx[num_block:total_block, :])
 
                 for i, j in T.Parallel(total_block, block_size):
                     hidden_fp32 = T.cast(hidden_share_ptx[i, j], accum_dtype)
-                    hidden_dot_ptx[i, j] = hidden_fp32 * weight[j]
                     hidden_square_ptx[i, j] = hidden_fp32 * hidden_fp32
+                    hidden_dot_ptx[i, j] = hidden_fp32 * T.cast(
+                        norm_weight_share_ptx[j] * proj_weight_share_ptx[j], accum_dtype
+                    )
 
-                T.reduce_sum(hidden_dot_ptx, tile_dot, dim=-1)
-                T.reduce_sum(hidden_square_ptx, tile_sum, dim=-1)
-                for i in T.Parallel(total_block):
-                    hidden_dot_sum_ptx[i] += tile_dot[i]
-                    hidden_square_sum_ptx[i] += tile_sum[i]
-
-            for i in T.Parallel(total_block):
-                rsqrt[i] = T.rsqrt(hidden_square_sum_ptx[i] * inv + eps)
+                T.reduce_sum(hidden_dot_ptx, tile_dot, dim=-1, clear=False)
+                T.reduce_sum(hidden_square_ptx, tile_sum, dim=-1, clear=False)
 
             for i in T.Parallel(total_block):
-                hidden_dot_sum_ptx[i] = hidden_dot_sum_ptx[i] * rsqrt[i]
+                rsqrt[i] = T.rsqrt(tile_sum[i] * inv + eps)
+                tile_dot[i] = tile_dot[i] * rsqrt[i]
 
             T.copy(rsqrt, rsqrt_output[token, :])
 
-            T.reduce_max(hidden_dot_sum_ptx, hidden_weight_max, dim=-1)
+            T.reduce_max(tile_dot, hidden_weight_max, dim=-1)
 
             idx_ptx = T.alloc_fragment((total_block,), T.int32)
             idx_sum = T.alloc_fragment((1,), T.int32)
 
             for i in T.Parallel(total_block):
                 idx_ptx[i] = T.if_then_else(
-                    hidden_dot_sum_ptx[i] == hidden_weight_max[0],
+                    tile_dot[i] == hidden_weight_max[0],
                     T.cast(i, T.int32),
                     T.int32(total_block),  # ty: ignore
                 )
@@ -119,29 +108,30 @@ def block_residual_fwd_kernel(
             T.copy(idx_sum, max_output[token, :])
 
             for i in T.Parallel(total_block):
-                hidden_dot_sum_ptx[i] = T.exp(hidden_dot_sum_ptx[i] - hidden_weight_max[0])
+                tile_dot[i] = T.exp(tile_dot[i] - hidden_weight_max[0])
 
-            T.copy(hidden_dot_sum_ptx, exp_output[token, :])
+            T.copy(tile_dot, exp_output[token, :])
 
-            T.reduce_sum(hidden_dot_sum_ptx, divisor, dim=-1)
+            T.reduce_sum(tile_dot, divisor, dim=-1)
 
             inv_2 = T.float32(1.0) / divisor[0]  # ty: ignore
             T.copy(divisor, div_output[token, :])
 
             for i in T.Parallel(total_block):
-                hidden_dot_sum_ptx[i] = hidden_dot_sum_ptx[i] * inv_2
+                tile_dot[i] = tile_dot[i] * inv_2
 
-            T.copy(hidden_dot_sum_ptx, softmax_output[token, :])
+            T.copy(tile_dot, softmax_output[token, :])
 
             for block in T.Pipelined(T.ceildiv(hidden_size, block_size), num_stages=num_stages):
                 T.clear(result_ptx)
+                hidden_share_ptx = T.alloc_shared((total_block, block_size), dtype)
 
                 ptx = block * block_size
                 T.copy(block_residual[token, :, ptx : ptx + block_size], hidden_share_ptx[0:num_block, :])
                 T.copy(prefix_sum[token, ptx : ptx + block_size], hidden_share_ptx[num_block:total_block, :])
 
                 for k, j in T.Parallel(total_block, block_size):
-                    result_ptx[j] += hidden_dot_sum_ptx[k] * T.cast(hidden_share_ptx[k, j], accum_dtype)
+                    result_ptx[j] += tile_dot[k] * T.cast(hidden_share_ptx[k, j], accum_dtype)
 
                 T.copy(result_ptx, output[token, ptx : ptx + block_size])
 
@@ -163,13 +153,12 @@ def block_residual_fwd(prefix_sum, block_residual, proj_weight, norm_weight, eps
     weight_dtype = str(norm_weight.dtype).replace("torch.", "")
     dtype = str(block_residual.dtype).replace("torch.", "")
 
-
     kernel = block_residual_fwd_kernel(
         block_residual.shape[1],
         block_residual.shape[2],
         dtype, weight_dtype, eps=eps
     )
-    
+
     kernel(
         prefix_sum,
         block_residual,
