@@ -3,7 +3,7 @@ import warnings
 from tilelang.profiler.bench import do_bench
 from benchmark.utils import measure_peak_memory
 import torch._inductor.config as inductor_config
-from tilelang_attnres.kernels import block_residual_fwd, apply_attn_res
+from tilelang_attnres.kernels import block_residual_inference, apply_attn_res
 
 
 warnings.filterwarnings("ignore")
@@ -37,7 +37,7 @@ for dtype in DTYPES:
 
 
         def Tilelang():
-            return block_residual_fwd(prefix_sum, block_residual, proj_weight.weight.view(-1), norm_weight.weight.view(-1))
+            return block_residual_inference(prefix_sum, block_residual, proj_weight.weight.view(-1), norm_weight.weight.view(-1))
 
         def Torch_compile():
             return compile_kernel(prefix_sum, block_residual, proj_weight, norm_weight)

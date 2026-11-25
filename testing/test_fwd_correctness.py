@@ -4,7 +4,7 @@ from utils import rel
 from tilelang.profiler.bench import do_bench
 import torch._inductor.config as inductor_config
 from tilelang_attnres.kernels import apply_attn_res
-from tilelang_attnres.kernels.attn_res_fwd_copy import block_residual_fwd
+from tilelang_attnres.kernels.attn_res_fwd import block_residual_inference
 
 
 warnings.filterwarnings("ignore")
@@ -36,7 +36,9 @@ for dtype in DTYPES:
         norm_weight.variance_epsilon = norm_weight.eps
 
         def Tilelang():
-            return block_residual_fwd(prefix_sum, block_residual, proj_weight.weight.view(-1), norm_weight.weight.view(-1))
+            return block_residual_inference(
+                prefix_sum, block_residual, proj_weight.weight.view(-1), norm_weight.weight.view(-1)
+            )
 
         def Torch_compile():
             return compile_kernel(prefix_sum, block_residual, proj_weight, norm_weight)
@@ -48,7 +50,7 @@ for dtype in DTYPES:
 
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-        r_tile = Tilelang()[0]
+        r_tile = Tilelang()
         r_torch = Torch()
         r_comp = Torch_compile()
         atol = 0.01 if dtype == torch.float32 else 0.05

@@ -8,13 +8,23 @@ This repository implements the **Attention Residual** architecture from **Kimi K
 Tilelang-AttnRes/
 ├── assets/                      # Images / resources
 ├── benchmark/                   # Benchmark scripts
-│   ├── benchmark_fwd.py
-│   └── benchmark_bwd.py
+│   ├── benchmark_autograd_wrapper_bwd.py
+│   ├── benchmark_autograd_wrapper_fwd.py
+|   ├── benchmark_bwd.py
+|   ├── benchmark_fwd.py
+|   └── utils.py
+├── testing/                     # Benchmark scripts
+│   ├── test_autograd_wrapper_bwd.py
+│   ├── test_autograd_wrapper_fwd.py
+|   ├── test_bwd_correctness.py
+|   ├── test_fwd_correctness.py
+|   └── utils.py
 ├── tilelang_attnres/            # Python package
 │   ├── __init__.py              # Autograd & nn.Module wrappers
 │   └── kernels/
 │       ├── attn_res_fwd.py      # Forward kernel
-│       └── attn_res_bwd.py      # Backward kernel
+│       ├── attn_res_bwd.py      # Backward kernel
+│       └── baseline.py
 ├── requirements.txt
 └── README.md
 ```
@@ -24,10 +34,12 @@ Tilelang-AttnRes/
 ### Install
 
 ```bash
-pip install tilelang-attn-res
+pip install tilelang-attnres
+# or 
+pip install git+https://github.com/Index4NekoMeteor/tilelang-attnres.git
 ```
 
-### Replace the original function
+### Replace the original function(training/inference)
 
 In modeling_kimi_k3.py
 ```python
@@ -53,8 +65,19 @@ class KimiDecoderLayer(nn.Module):
         batch_size, seq_len, hidden_size = hidden_states.shape
         prefix_sum = hidden_states
 
+        # training
         if block_residual is not None and block_residual.shape[1] > 0:
             hidden_states = attn_res_tilelang(  # replace _apply_attn_res
+                prefix_sum.view(-1, hidden_size),
+                block_residual,
+                self.self_attention_res_proj,
+                self.self_attention_res_norm,
+            ).view(batch_size, seq_len, hidden_size)
+        ...
+        
+        # inference
+        if block_residual is not None and block_residual.shape[1] > 0:
+            hidden_states = block_residual_inference(  # replace _apply_attn_res
                 prefix_sum.view(-1, hidden_size),
                 block_residual,
                 self.self_attention_res_proj,
@@ -77,25 +100,25 @@ class KimiDecoderLayer(nn.Module):
 
 **bfloat16:**
 
-| Shape | TileLang (ms) | Torch (ms) | Torch Compile (ms) | Speedup (TileLang) | Speedup (Compile) | rel_err TileLang/Torch | rel_err TileLang/Compile |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1280×8×7168  | 0.258 | 5.699 | 1.104 | **22.12×** | 5.16× | 2.34e-05 | 1.90e-05 |
-| 2560×4×7168  | 0.243 | 5.711 | 1.854 | **23.53×** | 3.08× | 2.37e-05 | 2.02e-05 |
-| 5120×2×7168  | 0.398 | 8.079 | 2.666 | **20.29×** | 3.03× | 1.94e-05 | 1.69e-05 |
-| 10240×1×7168 | 0.570 | 11.232| 3.447 | **19.70×** | 3.26× | 1.68e-05 | 1.35e-05 |
-| 7680×8×768   | 0.142 | 3.163 | 1.231 | **22.26×** | 2.57× | 2.55e-05 | 2.38e-05 |
-| 768×1×4096   | 0.032 | 0.223 | 0.101 | **7.06×**  | 2.21× | 1.22e-05 | 1.43e-05 |
+| Shape | TileLang (ms) | Torch (ms) | Torch Compile (ms) | Speedup (TileLang) | Speedup (Compile) | Mem TileLang | Mem Torch | Mem Compile |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1280×8×7168  | 0.334 | 5.336 | 1.281 | **15.99×** | 4.16× | 17.64 MB | 1105.66 MB | 368.59 MB |
+| 2560×4×7168  | 0.246 | 5.596 | 1.437 | **22.74×** | 3.90× | 35.17 MB | 1226.17 MB | 456.10 MB |
+| 5120×2×7168  | 0.326 | 7.665 | 2.303 | **23.49×** | 3.33× | 70.21 MB | 1470.20 MB | 630.12 MB |
+| 10240×1×7168 | 0.505 | 10.096| 3.503 | **19.98×** | 2.88× | 140.31 MB| 1960.26 MB | 980.16 MB |
+| 7680×8×768   | 0.292 | 3.022 | 0.765 | **10.34×** | 3.95× | 12.10 MB | 709.54 MB  | 236.78 MB |
+| 768×1×4096   | 0.019 | 0.192 | 0.077 | **9.98×**  | 2.48× | 6.02 MB  | 84.03 MB   | 42.01 MB  |
 
 **float32:**
 
-| Shape | TileLang (ms) | Torch (ms) | Torch Compile (ms) | Speedup (TileLang) | Speedup (Compile) | rel_err TileLang/Torch | rel_err TileLang/Compile |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1280×8×7168  | 0.432 | 5.121 | 2.152 | **11.84×** | 2.38× | 1.04e-06 | 8.80e-07 |
-| 2560×4×7168  | 0.540 | 5.555 | 2.301 | **10.28×** | 2.41× | 1.13e-06 | 8.18e-07 |
-| 5120×2×7168  | 0.761 | 8.021 | 2.806 | **10.54×** | 2.86× | 9.85e-07 | 7.60e-07 |
-| 10240×1×7168 | 1.298 | 10.252| 3.258 | **7.90×**  | 3.15× | 8.55e-07 | 6.57e-07 |
-| 7680×8×768   | 0.280 | 2.966 | 1.680 | **10.61×** | 1.77× | 5.67e-07 | 5.37e-07 |
-| 768×1×4096   | 0.048 | 0.211 | 0.104 | **4.38×**  | 2.03× | 6.97e-07 | 4.93e-07 |
+| Shape | TileLang (ms) | Torch (ms) | Torch Compile (ms) | Speedup (TileLang) | Speedup (Compile) | Mem TileLang | Mem Torch | Mem Compile |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1280×8×7168  | 0.425 | 4.355 | 1.250 | **10.24×** | 3.48× | 35.14 MB  | 948.16 MB  | 351.13 MB |
+| 2560×4×7168  | 0.492 | 5.003 | 1.522 | **10.17×** | 3.29× | 70.17 MB  | 1050.17 MB | 420.15 MB |
+| 5120×2×7168  | 0.678 | 6.532 | 2.304 | **9.63×**  | 2.83× | 140.21 MB | 1260.20 MB | 560.18 MB |
+| 10240×1×7168 | 1.040 | 9.151 | 3.332 | **8.80×**  | 2.75× | 280.31 MB | 1680.26 MB | 840.23 MB |
+| 7680×8×768   | 0.333 | 2.852 | 0.874 | **8.56×**  | 3.26× | 23.35 MB  | 608.29 MB  | 225.79 MB |
+| 768×1×4096   | 0.033 | 0.181 | 0.089 | **5.51×**  | 2.02× | 12.02 MB  | 72.03 MB   | 36.02 MB  |
 
 ### Backward
 
@@ -103,25 +126,25 @@ class KimiDecoderLayer(nn.Module):
 
 **bfloat16:**
 
-| Shape | TileLang (ms) | Torch (ms) | Torch Compile (ms) | Speedup (TileLang) | Speedup (Compile) | rel_err TileLang/Torch | rel_err TileLang/Compile |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1280×8×7168 | 0.916 | 16.155 | 4.040 | **17.64×** | 4.00× | 2.41e-04 | 2.22e-04 |
-| 2560×4×7168 | 0.861 | 18.376 | 5.302 | **21.33×** | 3.47× | 3.21e-04 | 2.43e-04 |
-| 5120×2×7168 | 1.021 | 26.337 | 7.984 | **25.80×** | 3.30× | 2.49e-04 | 2.18e-04 |
-| 10240×1×7168| 1.406 | 32.962 | 11.492| **23.45×** | 2.87× | 3.07e-04 | 2.31e-04 |
-| 7680×8×768  | 0.611 | 10.257 | 5.539 | **16.80×** | 1.85× | 1.15e-04 | 1.12e-04 |
-| 768×1×4096  | 0.083 | 0.921 | 0.409 | **11.16×** | 2.25× | 2.90e-04 | 1.52e-04 |
+| Shape | TileLang (ms) | Torch (ms) | Torch Compile (ms) | Speedup (TileLang) | Speedup (Compile) | Mem TileLang | Mem Torch | Mem Compile |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1280×8×7168  | 0.891 | 15.864 | 4.025  | **17.80×** | 3.94× | 175.22 MB | 1913.55 MB | 1123.14 MB |
+| 2560×4×7168  | 0.806 | 18.291 | 5.300  | **22.69×** | 3.45× | 210.25 MB | 2135.05 MB | 1260.16 MB |
+| 5120×2×7168  | 1.026 | 23.424 | 8.113  | **22.83×** | 2.89× | 280.30 MB | 2590.05 MB | 1566.50 MB |
+| 10240×1×7168 | 1.501 | 33.302 | 11.801 | **22.18×** | 2.82× | 420.39 MB | 3500.05 MB | 1820.23 MB |
+| 7680×8×768   | 0.636 | 10.189 | 2.604  | **16.03×** | 3.91× | 113.36 MB | 1226.26 MB | 730.36 MB  |
+| 768×1×4096   | 0.075 | 0.847  | 0.330  | **11.25×** | 2.57× | 18.07 MB  | 174.04 MB  | 78.02 MB   |
 
 **float32:**
 
-| Shape | TileLang (ms) | Torch (ms) | Torch Compile (ms) | Speedup (TileLang) | Speedup (Compile) | rel_err TileLang/Torch | rel_err TileLang/Compile |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1280×8×7168 | 1.658 | 14.967 | 5.566 | **9.03×** | 2.69× | 3.15e-05 | 1.57e-05 |
-| 2560×4×7168 | 2.427 | 17.111 | 6.642 | **7.05×** | 2.58× | 2.13e-05 | 1.68e-05 |
-| 5120×2×7168 | 2.347 | 21.645 | 10.614| **9.22×** | 2.04× | 2.13e-05 | 1.48e-05 |
-| 10240×1×7168| 3.316 | 33.348 | 10.281| **10.06×**| 3.24× | 1.94e-05 | 1.86e-05 |
-| 7680×8×768  | 0.943 | 11.038 | 4.543 | **11.71×**| 2.43× | 6.04e-06 | 5.77e-06 |
-| 768×1×4096  | 0.112 | 0.901 | 0.375 | **8.07×** | 2.40× | 1.59e-05 | 1.41e-05 |
+| Shape | TileLang (ms) | Torch (ms) | Torch Compile (ms) | Speedup (TileLang) | Speedup (Compile) | Mem TileLang | Mem Torch | Mem Compile |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1280×8×7168  | 1.681 | 14.912 | 4.243  | **8.87×**  | 3.51× | 351.22 MB | 1931.05 MB | 983.14 MB  |
+| 2560×4×7168  | 1.976 | 17.129 | 5.214  | **8.67×**  | 3.29× | 420.25 MB | 2170.05 MB | 1120.16 MB |
+| 5120×2×7168  | 2.519 | 21.783 | 7.458  | **8.65×**  | 2.92× | 560.30 MB | 2660.05 MB | 1426.50 MB |
+| 10240×1×7168 | 3.716 | 30.747 | 10.068 | **8.27×**  | 3.05× | 840.39 MB | 3640.05 MB | 1498.21 MB |
+| 7680×8×768   | 0.854 | 9.596  | 2.780  | **11.24×** | 3.45× | 225.86 MB | 1237.51 MB | 640.36 MB  |
+| 768×1×4096   | 0.105 | 0.860  | 0.330  | **8.19×**  | 2.61× | 36.07 MB  | 180.04 MB  | 60.20 MB   |
 
 > **Note**
 > - `rel_err = ‖TileLang − baseline‖₂ / ‖baseline‖₂`, computed in `float32` to avoid bf16 accumulation artifacts in the metric itself.

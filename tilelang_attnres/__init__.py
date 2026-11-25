@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.autograd import Function
-from .kernels import block_residual_fwd, block_residual_bwd, apply_attn_res
+from .kernels import block_residual_fwd, block_residual_bwd, apply_attn_res, block_residual_inference
 
 
 class AttnResFunction(Function):
@@ -73,17 +73,19 @@ class AttnRes(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
         self.eps = eps
-        self.proj_weight = nn.Parameter(torch.ones(hidden_size))
-        self.norm_weight = nn.Parameter(torch.ones(hidden_size))
+        self.proj_weight = nn.Linear(hidden_size, 1, bias=False)
+        self.norm_weight = nn.RMSNorm(hidden_size, eps)
 
     def forward(self, prefix_sum, block_residual):
         return AttnResFunction.apply(prefix_sum, block_residual, self.proj_weight, self.norm_weight, self.eps)
 
 
 __all__ = [
+    "AttnRes",
+    "apply_attn_res",
     "AttnResFunction",
-    "AttnRes", 
+    "attn_res_tilelang",
     "block_residual_fwd",
     "block_residual_bwd",
-    "attn_res_tilelang",
+    "block_residual_inference",
 ]
