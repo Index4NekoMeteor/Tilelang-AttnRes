@@ -2,6 +2,8 @@
 
 This repository implements the **Attention Residual** architecture from **Kimi K3** using [TileLang](https://github.com/tile-ai/tilelang), including both **forward** and **backward** kernels. The operators are benchmarked against native PyTorch and `torch.compile`.
 
+![image](./assets/image.png)
+
 ## Repository Structure
 
 ```text
